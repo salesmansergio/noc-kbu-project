@@ -192,9 +192,8 @@ class IntercomExtractor:
         return None
     
     def list_articles_by_collection(self, collection_id: str, page_size: int = 50, limit: Optional[int] = None) -> List[Dict[str, Any]]:
-        """Fetch articles from a specific collection by filtering all articles."""
+        """Fetch articles from a specific collection using optimized search approach."""
         print(f"Starting article extraction from collection {collection_id}...")
-        print("Note: Filtering articles by collection using parent_id/parent_ids fields...")
         
         # Convert collection_id to int for comparison
         try:
@@ -203,13 +202,65 @@ class IntercomExtractor:
             print(f"Invalid collection ID format: {collection_id}")
             return []
         
+        # Try to get collection name for potential search optimization
+        collection_name = None
+        try:
+            collections = self.list_collections()
+            for collection in collections:
+                if collection.get("id") == collection_id:
+                    collection_name = collection.get("name")
+                    break
+        except Exception:
+            pass  # Fallback to original method if collections fetch fails
+        
+        # Method 1: Try search API with collection name (if available)
+        if collection_name and len(collection_name.split()) <= 3:  # Simple collection names work better with search
+            print(f"Attempting optimized search for collection name: '{collection_name}'")
+            search_results = self._search_articles_by_phrase(collection_name, limit=limit*3)  # Get more results to filter
+            
+            # Filter search results by actual parent_id
+            filtered_from_search = []
+            for article in search_results:
+                parent_id = article.get("parent_id")
+                parent_ids = article.get("parent_ids", [])
+                
+                # Convert to int for comparison
+                if parent_id is not None:
+                    try:
+                        parent_id = int(parent_id)
+                    except (ValueError, TypeError):
+                        parent_id = None
+                
+                if parent_ids:
+                    try:
+                        parent_ids = [int(pid) for pid in parent_ids if pid is not None]
+                    except (ValueError, TypeError):
+                        parent_ids = []
+                
+                # Check if matches our target collection
+                if (parent_id == collection_id_int or collection_id_int in parent_ids):
+                    filtered_from_search.append(article)
+                    if limit and len(filtered_from_search) >= limit:
+                        break
+            
+            if filtered_from_search:
+                print(f"Search method found {len(filtered_from_search)} articles efficiently")
+                return filtered_from_search[:limit] if limit else filtered_from_search
+            else:
+                print("Search method didn't find articles, falling back to full scan...")
+        
+        # Method 2: Fallback to original filtering method with early stopping
+        print("Using full scan with early stopping optimization...")
         filtered_articles = []
         url = f"{self.base_url}/articles"
         params = {"per_page": page_size}
         total_fetched = 0
+        pages_scanned = 0
+        max_pages_without_results = 5  # Stop if no results found in 5 consecutive pages
+        pages_without_results = 0
         
         while url and (limit is None or len(filtered_articles) < limit):
-            print(f"Fetching page... (total fetched: {total_fetched}, filtered: {len(filtered_articles)})")
+            print(f"Fetching page {pages_scanned + 1}... (total fetched: {total_fetched}, filtered: {len(filtered_articles)})")
             
             response_data = self._make_request(url, params)
             page_articles = response_data.get("data", [])
@@ -218,10 +269,11 @@ class IntercomExtractor:
                 break
             
             total_fetched += len(page_articles)
+            pages_scanned += 1
+            found_in_page = 0
             
             # Filter articles that belong to this collection
             for article in page_articles:
-                # Check if article belongs to this collection via parent_id or parent_ids
                 parent_id = article.get("parent_id")
                 parent_ids = article.get("parent_ids", [])
                 
@@ -240,13 +292,22 @@ class IntercomExtractor:
                         parent_ids = []
                 
                 # Check if collection_id matches parent_id or is in parent_ids
-                if (parent_id == collection_id_int or 
-                    collection_id_int in parent_ids):
+                if (parent_id == collection_id_int or collection_id_int in parent_ids):
                     filtered_articles.append(article)
+                    found_in_page += 1
                     
                     # Stop if we've reached the limit
                     if limit and len(filtered_articles) >= limit:
                         break
+            
+            # Early stopping logic for sparse collections
+            if found_in_page == 0:
+                pages_without_results += 1
+                if pages_without_results >= max_pages_without_results:
+                    print(f"Early stopping: No results found in {max_pages_without_results} consecutive pages")
+                    break
+            else:
+                pages_without_results = 0  # Reset counter if we found results
             
             # Break if we've reached the limit
             if limit and len(filtered_articles) >= limit:
@@ -260,6 +321,28 @@ class IntercomExtractor:
         
         print(f"Filtered {len(filtered_articles)} articles from collection {collection_id} (scanned {total_fetched} total articles)")
         return filtered_articles
+    
+    def _search_articles_by_phrase(self, phrase: str, limit: Optional[int] = None, state: str = "published") -> List[Dict[str, Any]]:
+        """Search articles using Intercom search API."""
+        articles = []
+        url = f"{self.base_url}/articles/search"
+        params = {
+            "phrase": phrase,
+            "state": state,
+            "per_page": min(50, limit) if limit else 50
+        }
+        
+        try:
+            response_data = self._make_request(url, params)
+            search_data = response_data.get("data", {})
+            articles = search_data.get("articles", [])
+            
+            print(f"Search API found {len(articles)} articles for phrase '{phrase}'")
+            return articles[:limit] if limit else articles
+            
+        except Exception as e:
+            print(f"Search API failed: {e}")
+            return []
     
     def enrich_articles_with_details(self, articles: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Enrich article list with detailed content from individual API calls."""
