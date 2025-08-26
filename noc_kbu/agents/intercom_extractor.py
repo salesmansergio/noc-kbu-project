@@ -17,15 +17,19 @@ class IntercomArticle(BaseModel):
     """Structured representation of an Intercom article."""
     id: str
     title: str
-    body: str
+    body: Optional[str] = None  # Can be null according to API docs
+    workspace_id: str
+    description: Optional[str] = None
     url: Optional[str] = None
-    author_id: Optional[str] = None
+    author_id: Optional[int] = None  # Integer, not string
     created_at: Optional[int] = None
     updated_at: Optional[int] = None
     state: Optional[str] = None
-    parent_id: Optional[str] = None
+    parent_id: Optional[int] = None  # Integer, not string  
+    parent_ids: Optional[List[int]] = None  # Array of parent IDs
     parent_type: Optional[str] = None
-    statistics: Optional[Dict[str, Any]] = None
+    default_locale: Optional[str] = None
+    type: str = "article"  # Always "article" according to API
 
 
 class IntercomExtractor:
