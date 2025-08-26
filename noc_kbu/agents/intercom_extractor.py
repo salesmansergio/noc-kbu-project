@@ -32,6 +32,23 @@ class IntercomArticle(BaseModel):
     type: str = "article"  # Always "article" according to API
 
 
+class IntercomCollection(BaseModel):
+    """Structured representation of an Intercom collection."""
+    id: str
+    workspace_id: str
+    name: str
+    description: Optional[str] = None
+    created_at: Optional[int] = None
+    updated_at: Optional[int] = None
+    url: Optional[str] = None
+    icon: Optional[str] = None
+    order: Optional[int] = None
+    help_center_id: Optional[str] = None
+    parent_id: Optional[str] = None
+    parent_type: Optional[str] = None
+    type: str = "collection"  # Always "collection" according to API
+
+
 class IntercomExtractor:
     """Handles extraction of articles from Intercom API."""
     
@@ -115,6 +132,135 @@ class IntercomExtractor:
             print(f"Failed to fetch article {article_id}: {e}")
             return None
     
+    def list_collections(self, page_size: int = 50) -> List[Dict[str, Any]]:
+        """Fetch all collections from Intercom with pagination."""
+        collections = []
+        url = f"{self.base_url}/help_center/collections"
+        params = {"per_page": page_size}
+        
+        print(f"Starting collection extraction from Intercom...")
+        
+        while url:
+            print(f"Fetching collections page... (current count: {len(collections)})")
+            
+            response_data = self._make_request(url, params)
+            page_collections = response_data.get("data", [])
+            
+            if not page_collections:
+                break
+                
+            collections.extend(page_collections)
+            
+            # Get next page URL
+            pages = response_data.get("pages", {})
+            url = pages.get("next")
+            params = None  # Next URL includes all parameters
+        
+        print(f"Extracted {len(collections)} collections from Intercom")
+        return collections
+    
+    def find_collection_by_name(self, collection_name: str) -> Optional[str]:
+        """Find collection ID by name (case-insensitive partial match)."""
+        collections = self.list_collections()
+        
+        # Try exact match first
+        for collection in collections:
+            if collection.get("name", "").lower() == collection_name.lower():
+                print(f"Found exact collection match: '{collection['name']}' (ID: {collection['id']})")
+                return collection["id"]
+        
+        # Try partial match
+        matches = []
+        for collection in collections:
+            if collection_name.lower() in collection.get("name", "").lower():
+                matches.append(collection)
+        
+        if len(matches) == 1:
+            collection = matches[0]
+            print(f"Found collection match: '{collection['name']}' (ID: {collection['id']})")
+            return collection["id"]
+        elif len(matches) > 1:
+            print(f"Multiple collections found matching '{collection_name}':")
+            for collection in matches:
+                print(f"  - {collection['name']} (ID: {collection['id']})")
+            raise Exception(f"Ambiguous collection name '{collection_name}'. Please be more specific.")
+        
+        print(f"No collection found matching '{collection_name}'")
+        print("Available collections:")
+        for collection in collections:
+            print(f"  - {collection.get('name', 'Unnamed')} (ID: {collection['id']})")
+        return None
+    
+    def list_articles_by_collection(self, collection_id: str, page_size: int = 50, limit: Optional[int] = None) -> List[Dict[str, Any]]:
+        """Fetch articles from a specific collection by filtering all articles."""
+        print(f"Starting article extraction from collection {collection_id}...")
+        print("Note: Filtering articles by collection using parent_id/parent_ids fields...")
+        
+        # Convert collection_id to int for comparison
+        try:
+            collection_id_int = int(collection_id)
+        except ValueError:
+            print(f"Invalid collection ID format: {collection_id}")
+            return []
+        
+        filtered_articles = []
+        url = f"{self.base_url}/articles"
+        params = {"per_page": page_size}
+        total_fetched = 0
+        
+        while url and (limit is None or len(filtered_articles) < limit):
+            print(f"Fetching page... (total fetched: {total_fetched}, filtered: {len(filtered_articles)})")
+            
+            response_data = self._make_request(url, params)
+            page_articles = response_data.get("data", [])
+            
+            if not page_articles:
+                break
+            
+            total_fetched += len(page_articles)
+            
+            # Filter articles that belong to this collection
+            for article in page_articles:
+                # Check if article belongs to this collection via parent_id or parent_ids
+                parent_id = article.get("parent_id")
+                parent_ids = article.get("parent_ids", [])
+                
+                # Convert parent_id to int if it exists
+                if parent_id is not None:
+                    try:
+                        parent_id = int(parent_id)
+                    except (ValueError, TypeError):
+                        parent_id = None
+                
+                # Convert parent_ids to integers
+                if parent_ids:
+                    try:
+                        parent_ids = [int(pid) for pid in parent_ids if pid is not None]
+                    except (ValueError, TypeError):
+                        parent_ids = []
+                
+                # Check if collection_id matches parent_id or is in parent_ids
+                if (parent_id == collection_id_int or 
+                    collection_id_int in parent_ids):
+                    filtered_articles.append(article)
+                    
+                    # Stop if we've reached the limit
+                    if limit and len(filtered_articles) >= limit:
+                        break
+            
+            # Break if we've reached the limit
+            if limit and len(filtered_articles) >= limit:
+                filtered_articles = filtered_articles[:limit]
+                break
+            
+            # Get next page URL
+            pages = response_data.get("pages", {})
+            url = pages.get("next")
+            params = None  # Next URL includes all parameters
+        
+        print(f"Filtered {len(filtered_articles)} articles from collection {collection_id} (scanned {total_fetched} total articles)")
+        return filtered_articles
+    
     def enrich_articles_with_details(self, articles: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Enrich article list with detailed content from individual API calls."""
         enriched_articles = []
@@ -171,12 +317,19 @@ class IntercomExtractor:
     def extract_and_save(
         self,
         limit: Optional[int] = None,
+        collection_name: Optional[str] = None,
         enrich_details: bool = True,
         filename: Optional[str] = None
     ) -> Path:
         """Complete extraction workflow: fetch, enrich, validate, and save."""
-        # Fetch article list
-        articles = self.list_articles(limit=limit)
+        # Fetch article list - either from specific collection or all articles
+        if collection_name:
+            collection_id = self.find_collection_by_name(collection_name)
+            if not collection_id:
+                raise Exception(f"Collection '{collection_name}' not found")
+            articles = self.list_articles_by_collection(collection_id, limit=limit)
+        else:
+            articles = self.list_articles(limit=limit)
         
         if not articles:
             raise Exception("No articles found")
@@ -204,6 +357,8 @@ def main():
     
     parser = argparse.ArgumentParser(description="Extract articles from Intercom")
     parser.add_argument("--limit", type=int, help="Maximum number of articles to extract")
+    parser.add_argument("--collection", type=str, help="Filter articles by collection name (exact or partial match)")
+    parser.add_argument("--list-collections", action="store_true", help="List all available collections and exit")
     parser.add_argument("--no-details", action="store_true", help="Skip detailed content enrichment")
     parser.add_argument("--output", help="Output filename")
     
@@ -211,8 +366,31 @@ def main():
     
     try:
         extractor = IntercomExtractor()
+        
+        # Handle list collections command
+        if args.list_collections:
+            print("📚 Available Collections:")
+            print("=" * 50)
+            collections = extractor.list_collections()
+            if not collections:
+                print("No collections found.")
+                return
+            
+            for collection in collections:
+                print(f"• {collection.get('name', 'Unnamed')} (ID: {collection['id']})")
+                if collection.get('description'):
+                    print(f"  Description: {collection['description']}")
+                print()
+            
+            print(f"Total: {len(collections)} collections found.")
+            print("\nTo extract from a specific collection, use:")
+            print("python -m noc_kbu.agents.intercom_extractor --collection \"<collection_name>\" --limit <number>")
+            return
+        
+        # Handle article extraction
         file_path = extractor.extract_and_save(
             limit=args.limit,
+            collection_name=args.collection,
             enrich_details=not args.no_details,
             filename=args.output
         )

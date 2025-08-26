@@ -5,10 +5,18 @@ A Python-based migration tool to transfer articles from Intercom to Zendesk with
 ## Project Overview
 
 NOC KBU facilitates the migration of knowledge base articles from Intercom to Zendesk by:
-- Extracting articles via Intercom API
-- Evaluating content for duplicates and quality issues
-- Providing a local review workflow
-- Uploading approved articles to Zendesk
+- **Collection Discovery** - Exploring and listing available Intercom collections
+- **Smart Extraction** - Filtering articles by collection or extracting all articles
+- **Content Analysis** - Evaluating content for duplicates and quality issues  
+- **Review Workflow** - Local human review with interactive reports
+- **Controlled Upload** - Transferring only approved articles to Zendesk
+
+### ✨ New Features
+
+- **🎯 Collection Filtering**: Target specific collections instead of processing all articles
+- **📚 Collection Discovery**: List and explore available collections before extraction
+- **🔍 Smart Matching**: Exact and partial collection name matching with helpful error handling
+- **⚡ Smart Processing**: Client-side filtering by collection reduces irrelevant content processing
 
 ## Architecture
 
@@ -60,11 +68,33 @@ noc_kbu/
 
 ## Usage
 
-### Phase 1: Small Scale Testing (10-20 articles)
-```bash
-# Extract articles from Intercom
-python -m noc_kbu.agents.intercom_extractor --limit 20
+### Phase 1: Small Scale Testing with Collection Filtering (10-20 articles)
 
+#### Step 1: Discover Available Collections
+Before extracting articles, you can explore available collections:
+
+```bash
+# List all available collections (CLI interface)
+noc-kbu collections
+
+# Or using the agent directly
+python -m noc_kbu.agents.intercom_extractor --list-collections
+```
+
+#### Step 2: Extract Articles from Specific Collection
+```bash
+# Extract from a specific collection (recommended approach)
+python -m noc_kbu.agents.intercom_extractor --collection "API Documentation" --limit 20
+
+# Or using CLI interface
+noc-kbu extract --collection "Getting Started" --limit 10
+
+# Still works: Extract from all collections (original behavior)
+python -m noc_kbu.agents.intercom_extractor --limit 20
+```
+
+#### Step 3: Process and Analyze
+```bash
 # Analyze content for duplicates and quality
 python -m noc_kbu.agents.content_analyzer
 
@@ -77,9 +107,30 @@ python -m noc_kbu.agents.zendesk_uploader --approved-only
 
 ### Phase 2: Full Scale Migration (1000+ articles)
 ```bash
-# Process all articles
+# Process all articles from specific collection
+noc-kbu extract --collection "Product Documentation" --limit 1000
+
+# Or process all articles (original behavior)
 python -m noc_kbu.cli migrate --batch-size 100
 ```
+
+### Collection Filtering Features
+
+**Smart Collection Matching:**
+- **Exact Match**: `--collection "API Documentation"`
+- **Partial Match**: `--collection "API"` (matches "API Documentation")
+- **Case Insensitive**: `--collection "api"` (matches "API Documentation")
+
+**How Collection Filtering Works:**
+- Fetches all articles from Intercom API (standard `/articles` endpoint)
+- Filters articles client-side based on `parent_id` and `parent_ids` fields
+- Only processes articles that belong to the specified collection
+- Stops fetching when the desired number of filtered articles is reached
+
+**Error Handling:**
+- Shows available collections if collection not found
+- Handles ambiguous matches with helpful suggestions
+- Lists all available collections for easy discovery
 
 ## Configuration
 
@@ -106,15 +157,37 @@ mypy .
 
 ## Workflow
 
-1. **Extract** - Pull articles from Intercom API
-2. **Analyze** - Detect duplicates, assess content quality
-3. **Review** - Human evaluation of flagged content
-4. **Approve** - Mark articles ready for migration
-5. **Upload** - Transfer approved articles to Zendesk
+### Enhanced Workflow with Collection Filtering
+
+1. **Discover** - List and explore available Intercom collections
+2. **Extract** - Pull articles from Intercom API (all or filtered by collection)
+3. **Analyze** - Detect duplicates, assess content quality
+4. **Review** - Human evaluation of flagged content
+5. **Approve** - Mark articles ready for migration
+6. **Upload** - Transfer approved articles to Zendesk
+
+### Workflow Commands
+
+```bash
+# 1. Discover collections
+noc-kbu collections
+
+# 2. Extract from specific collection (recommended)
+noc-kbu extract --collection "API Docs" --limit 20
+
+# 3. Analyze extracted content
+noc-kbu analyze
+
+# 4. Generate review reports
+noc-kbu review --generate-report
+
+# 5. Upload approved articles
+noc-kbu upload --approved-only
+```
 
 ## Data Processing Pipeline
 
 ```
-Intercom API → Raw JSON → Content Processing → Duplicate Detection → 
-Quality Evaluation → Human Review → Approved Collection → Zendesk Upload
+Collection Discovery → Intercom API (Filtered) → Raw JSON → Content Processing → 
+Duplicate Detection → Quality Evaluation → Human Review → Approved Collection → Zendesk Upload
 ```

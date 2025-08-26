@@ -30,12 +30,16 @@ def cli(ctx, debug):
 
 @cli.command()
 @click.option('--limit', type=int, help='Maximum number of articles to extract')
+@click.option('--collection', type=str, help='Filter articles by collection name (exact or partial match)')
 @click.option('--no-details', is_flag=True, help='Skip detailed content enrichment')
 @click.option('--output', help='Output filename')
 @click.pass_context
-def extract(ctx, limit, no_details, output):
+def extract(ctx, limit, collection, no_details, output):
     """Extract articles from Intercom API."""
-    console.print("🔍 Starting Intercom extraction...", style="blue")
+    if collection:
+        console.print(f"🔍 Starting Intercom extraction from collection: [cyan]{collection}[/cyan]", style="blue")
+    else:
+        console.print("🔍 Starting Intercom extraction...", style="blue")
     
     try:
         settings = get_settings()
@@ -45,6 +49,7 @@ def extract(ctx, limit, no_details, output):
         
         file_path = extractor.extract_and_save(
             limit=limit,
+            collection_name=collection,
             enrich_details=not no_details,
             filename=output
         )
@@ -53,6 +58,46 @@ def extract(ctx, limit, no_details, output):
         
     except Exception as e:
         console.print(f"❌ Extraction failed: [red]{e}[/red]")
+        if ctx.obj.get('debug'):
+            raise
+
+
+@cli.command()
+@click.pass_context
+def collections(ctx):
+    """List all available collections from Intercom."""
+    console.print("📚 Fetching collections from Intercom...", style="blue")
+    
+    try:
+        settings = get_settings()
+        extractor = IntercomExtractor(
+            output_dir=settings.paths.raw_data_path
+        )
+        
+        collections = extractor.list_collections()
+        
+        if not collections:
+            console.print("No collections found", style="yellow")
+            return
+        
+        # Create a table to display collections
+        table = Table(title="Available Collections")
+        table.add_column("ID", style="dim")
+        table.add_column("Name", style="bold")
+        table.add_column("Description", style="dim")
+        
+        for collection in collections:
+            table.add_row(
+                collection.get("id", "N/A"),
+                collection.get("name", "Unnamed"),
+                collection.get("description", "No description") or "No description"
+            )
+        
+        console.print(table)
+        console.print(f"\n✅ Found {len(collections)} collections")
+        
+    except Exception as e:
+        console.print(f"❌ Failed to fetch collections: [red]{e}[/red]")
         if ctx.obj.get('debug'):
             raise
 
